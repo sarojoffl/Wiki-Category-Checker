@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Wiki Category Checker</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #f0f2f5;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            flex-direction: column;
+        }
+
+        .container {
+            background: #fff;
+            padding: 40px;
+            border-radius: 15px;
+            box-shadow: 0 8px 25px rgba(0,0,0,0.1);
+            width: 400px;
+            max-width: 90%;
+            position: relative;
+        }
+
+        h1 {
+            text-align: center;
+            font-size: 1.8rem;
+            color: #333;
+            margin-bottom: 25px;
+        }
+
+        form {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        label {
+            font-weight: 600;
+            color: #555;
+        }
+
+        input[type="text"] {
+            padding: 10px 12px;
+            border-radius: 8px;
+            border: 1px solid #ccc;
+            font-size: 0.95rem;
+            transition: border-color 0.2s;
+        }
+
+        input[type="text"]:focus {
+            outline: none;
+            border-color: #0077ff;
+        }
+
+        button {
+            background: #0077ff;
+            color: #fff;
+            padding: 12px;
+            border: none;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        button:hover {
+            background: #005ecc;
+        }
+
+        .category-list {
+            list-style: none;
+            padding: 0;
+            margin-top: 25px;
+        }
+
+        .category-list li {
+            background: #f7f9fc;
+            border-left: 5px solid #0077ff;
+            padding: 8px 12px;
+            margin-bottom: 8px;
+            border-radius: 5px;
+            font-size: 0.95rem;
+            color: #333;
+            transition: transform 0.1s;
+        }
+
+        .category-list li:hover {
+            transform: translateX(5px);
+            background: #e6f0ff;
+        }
+
+        .spinner {
+            display: none;
+            margin: 20px auto;
+            width: 40px;
+            height: 40px;
+            border: 5px solid #f3f3f3;
+            border-top: 5px solid #0077ff;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        #warning {
+            text-align: center;
+            margin-top: 10px;
+            font-size: 0.95rem;
+            padding: 8px 12px;
+            border-radius: 6px;
+            display: none;
+        }
+        .alert-warning { background-color: #fff3cd; color: #856404; border: 1px solid #ffeeba; }
+        .alert-error { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+
+        .footer {
+            margin-top: 20px;
+            font-size: 0.85rem;
+            color: #555;
+            text-align: center;
+        }
+
+        .footer a {
+            color: #0077ff;
+            text-decoration: none;
+            font-weight: 600;
+        }
+
+        .footer a:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Wiki Category Checker</h1>
+        <form id="category-form">
+            <label for="source">Source wiki language code:</label>
+            <input type="text" id="source" name="source_lang" placeholder="e.g., en">
+            
+            <label for="target">Target wiki language code:</label>
+            <input type="text" id="target" name="target_lang" placeholder="e.g., fr">
+            
+            <label for="title">Source wiki page title:</label>
+            <input type="text" id="title" name="page_title" placeholder="e.g., Nepal">
+            
+            <button type="submit">Fetch Categories</button>
+        </form>
+
+        <div id="warning"></div>
+        <div class="spinner" id="spinner"></div>
+        <ul class="category-list" id="category-list"></ul>
+
+        <div class="footer">
+            Made with ❤️ by <a href="https://meta.wikimedia.org/wiki/User:Saroj" target="_blank">Saroj</a>
+        </div>
+    </div>
+
+    <script>
+        const form = document.getElementById('category-form');
+        const list = document.getElementById('category-list');
+        const spinner = document.getElementById('spinner');
+        const warning = document.getElementById('warning');
+
+        function showMessage(message, type) {
+            warning.textContent = message;
+            warning.className = "";
+            warning.style.display = "block";
+            if (type === "warning") warning.classList.add("alert-warning");
+            if (type === "error") warning.classList.add("alert-error");
+        }
+
+        form.addEventListener('submit', function(e) {
+            e.preventDefault();
+
+            list.innerHTML = "";
+            warning.textContent = "";
+            warning.style.display = "none";
+
+            const source = document.getElementById('source').value.trim();
+            const target = document.getElementById('target').value.trim();
+            const title = document.getElementById('title').value.trim();
+
+            if (!source) { showMessage("Please fill in the Source wiki language code.", "warning"); return; }
+            if (!target) { showMessage("Please fill in the Target wiki language code.", "warning"); return; }
+            if (!title) { showMessage("Please fill in the Source wiki page title.", "warning"); return; }
+
+            spinner.style.display = "block";
+
+            fetch("/api/categorycheck", {
+                method: "POST",
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ source_lang: source, target_lang: target, page_title: title })
+            })
+            .then(response => response.json())
+            .then(data => {
+                spinner.style.display = "none";
+
+                if (data.error) {
+                    showMessage(data.error, "error");
+                    return;
+                }
+
+                if (data.categories && data.categories.length > 0) {
+                    data.categories.forEach(cat => {
+                        const li = document.createElement('li');
+                        li.textContent = cat;
+                        list.appendChild(li);
+                    });
+                } else {
+                    showMessage("No categories found in target wiki.", "warning");
+                }
+            })
+            .catch(err => {
+                spinner.style.display = "none";
+                showMessage("Error fetching data.", "error");
+                console.error("Error:", err);
+            });
+        });
+    </script>
+</body>
+</html>
