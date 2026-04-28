@@ -10,13 +10,10 @@ HEADERS = {
     "User-Agent": "WikiCategoryChecker/1.0 (User:Saroj; https://meta.wikimedia.org/wiki/User:Saroj)"
 }
 
-qid_cache = {}
-target_cache = {}
-
 def wiki_domain(lang):
     return f"{lang}.wikipedia.org"
 
-def fetch_json(url, params, timeout=5):
+def fetch_json(url, params, timeout=15):
     try:
         r = requests.get(url, params=params, headers=HEADERS, timeout=timeout)
         r.raise_for_status()
@@ -28,14 +25,14 @@ def fetch_json(url, params, timeout=5):
 def wiki_exists(lang):
     url = f"https://{wiki_domain(lang)}/w/api.php"
     params = {"action": "query", "meta": "siteinfo", "format": "json"}
-    data = fetch_json(url, params)
-    return bool(data)
+    return bool(fetch_json(url, params))
 
 def page_exists(title, lang):
     url = f"https://{wiki_domain(lang)}/w/api.php"
     params = {"action": "query", "titles": title, "format": "json"}
     data = fetch_json(url, params)
-    if not data: return False
+    if not data:
+        return False
     pages = data.get("query", {}).get("pages", {})
     return "-1" not in pages
 
@@ -50,49 +47,61 @@ def get_categories(title, lang):
         "format": "json"
     }
     data = fetch_json(url, params)
-    if not data: return []
-
+    if not data:
+        return []
     pages = data.get("query", {}).get("pages", {})
     cats = []
     for page in pages.values():
         cats.extend([c["title"].replace("Category:", "").strip() for c in page.get("categories", [])])
     return cats
 
-def get_wikidata_qid(category, source_lang):
-    if category in qid_cache: return qid_cache[category]
-    url = "https://www.wikidata.org/w/api.php"
-    params = {
-        "action": "wbgetentities",
-        "sites": f"{source_lang}wiki",
-        "titles": f"Category:{category}",
-        "format": "json"
-    }
-    data = fetch_json(url, params)
-    if not data: return None
-    entities = data.get("entities", {})
-    for qid in entities:
-        if qid != "-1":
-            qid_cache[category] = qid
-            return qid
-    return None
+def get_wikidata_qids_batch(categories, source_lang):
+    titles = [f"Category:{c}" for c in categories]
+    results = {}
+    for i in range(0, len(titles), 50):
+        batch = titles[i:i+50]
+        url = "https://www.wikidata.org/w/api.php"
+        params = {
+            "action": "wbgetentities",
+            "sites": f"{source_lang}wiki",
+            "titles": "|".join(batch),
+            "props": "sitelinks",
+            "sitefilter": f"{source_lang}wiki",
+            "format": "json"
+        }
+        data = fetch_json(url, params)
+        if not data:
+            continue
+        for qid, entity in data.get("entities", {}).items():
+            if qid == "-1":
+                continue
+            sitelinks = entity.get("sitelinks", {})
+            src_title = sitelinks.get(f"{source_lang}wiki", {}).get("title", "").replace("Category:", "").strip()
+            if src_title:
+                results[src_title] = qid
+    return results
 
-def get_target_category_title(qid, target_lang):
-    if not qid: return None
-    cache_key = f"{qid}-{target_lang}"
-    if cache_key in target_cache: return target_cache[cache_key]
-    url = "https://www.wikidata.org/w/api.php"
-    params = {"action": "wbgetentities", "ids": qid, "props": "sitelinks", "format": "json"}
-    data = fetch_json(url, params)
-    if not data: return None
-    entity = data.get("entities", {}).get(qid, {})
-    sitelinks = entity.get("sitelinks", {})
-    title = sitelinks.get(f"{target_lang}wiki", {}).get("title")
-    if title: target_cache[cache_key] = title
-    return title
-
-def check_category(cat, source_lang, target_lang):
-    qid = get_wikidata_qid(cat, source_lang)
-    return get_target_category_title(qid, target_lang)
+def get_target_titles_batch(qid_map, target_lang):
+    qids = list(set(qid_map.values()))
+    qid_to_target = {}
+    for i in range(0, len(qids), 50):
+        batch = qids[i:i+50]
+        url = "https://www.wikidata.org/w/api.php"
+        params = {
+            "action": "wbgetentities",
+            "ids": "|".join(batch),
+            "props": "sitelinks",
+            "sitefilter": f"{target_lang}wiki",
+            "format": "json"
+        }
+        data = fetch_json(url, params)
+        if not data:
+            continue
+        for qid, entity in data.get("entities", {}).items():
+            title = entity.get("sitelinks", {}).get(f"{target_lang}wiki", {}).get("title")
+            if title:
+                qid_to_target[qid] = title.replace("Category:", "").strip()
+    return qid_to_target
 
 def category_check_logic(source_lang, target_lang, page_title):
     source_lang = source_lang.lower().strip()
@@ -107,12 +116,13 @@ def category_check_logic(source_lang, target_lang, page_title):
         return {"error": f"Page '{page_title}' does not exist in {source_lang}wiki."}
 
     source_cats = get_categories(page_title, source_lang)
-    categories_exist = []
-    for c in source_cats:
-        target_title = check_category(c, source_lang, target_lang)
-        if target_title:
-            categories_exist.append(target_title)
-    return {"categories": categories_exist}
+    if not source_cats:
+        return {"categories": []}
+
+    qid_map = get_wikidata_qids_batch(source_cats, source_lang)
+    qid_to_target = get_target_titles_batch(qid_map, target_lang)
+
+    return {"categories": list(qid_to_target.values())}
 
 @app.route("/")
 def home():
